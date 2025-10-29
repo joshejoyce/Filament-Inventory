@@ -86,7 +86,8 @@ actions:
                   {% if item.category == "" %}
                     {{ item.name }}
                   {% else %}
-                    {{ ([item.name] + state_attr('input_select.' ~ item.category, 'options')) | join('\n') }}
+                    {{ ([item.name] + state_attr('input_select.' ~ (item.category | replace(' ', '_')), 'options')) | join('\n') }}
                   {% endif %}
                 {% endif %}
               {% endfor %}
+
