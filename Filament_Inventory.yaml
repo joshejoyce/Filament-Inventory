@@ -1,0 +1,60 @@
+blueprint:
+  name: Filament Inventory
+  description: Automation to decrement stock or notify stock info depending on scanner
+  domain: automation
+  input:
+    inventory_id_number:
+      name: Inventory ID
+      description: Select Simple Inventory ID used for Filament
+      selector:
+        entity:
+          filter:
+            - domain: sensor
+    notify_device:
+      name: Notify Device
+      description: Select which device you want to send notifications too
+      selector:
+          device:
+            integration: mobile_app
+
+variables:
+  input_inventory_id_number: !input 'inventory_id_number'
+  input_inventory_id_number_id: "{{ state_attr(input_inventory_id_number,'inventory_id') }}"
+  scanned_tag: "{{ trigger.event.data.tag_id }}"
+  scanned_name: "{{ trigger.event.data.name }}"
+  inventory_name: >
+    {% for item in state_attr('sensor.filament_inventory','items') %}{{ item.name }}
+    {% endfor %}
+  input_notify_device: !input 'notify_device'
+  
+triggers: 
+- platform: event
+  event_type: tag_scanned
+condition:
+- condition: template
+  value_template: "{{ scanned_name in inventory_name }}"
+action:
+  # Decrement item (disabled by default)
+  - service: simple_inventory.decrement_item
+    data:
+      inventory_id: "{{ state_attr(input_inventory_id_number, 'inventory_id') }}"
+      name: "{{ trigger.event.data.name }}"
+      amount: 1
+    enabled: false
+
+  # Send notification
+  - device_id: !input notify_device
+    domain: mobile_app
+    type: notify
+    title: "Filament Info"
+    message: >
+      {% set test = trigger.event.data.name %}
+      {% for item in state_attr('sensor.filament_inventory', 'items') %}
+        {% if item.name == test %}
+          {% if item.category == "" %}
+            {{ item.name }}
+          {% else %}
+            {{ ([item.name] + state_attr('input_select.' ~ item.category, 'options')) | join('\n') }}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
