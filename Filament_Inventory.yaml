@@ -58,7 +58,7 @@ actions:
         event_type: mobile_app_notification_action
         event_data:
           action: SHOW_INFO
-    timeout: "00:05:00"
+    timeout: "00:00:30"
 
   - choose:
       - conditions:
@@ -90,4 +90,5 @@ actions:
                   {% endif %}
                 {% endif %}
               {% endfor %}
+
 
