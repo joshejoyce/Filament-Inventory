@@ -16,17 +16,26 @@ blueprint:
       selector:
         device:
           integration: mobile_app
+    scan_device:
+      name: Scan Device
+      description: Select which device will scan your tags
+      selector:
+        device:
+          integration: esphome
 
 variables:
   input_inventory_id_number: !input 'inventory_id_number'
   input_inventory_id_number_id: "{{ state_attr(input_inventory_id_number,'inventory_id') }}"
   scanned_tag: "{{ trigger.event.data.tag_id }}"
   scanned_name: "{{ trigger.event.data.name }}"
+  scanned_device: "{{ trigger.event.data.device_id }}"
   inventory_name: >
-    {% for item in state_attr('sensor.filament_inventory','items') %}
+    {% for item in state_attr(input_inventory_id_number,'items') %}
       {{ item.name }}
     {% endfor %}
   input_notify_device: !input 'notify_device'
+  input_scan_device: !input 'scan_device'
+  expdate_set: "{{ now() + timedelta(days=60) }}"
 
 triggers:
   - platform: event
@@ -37,58 +46,135 @@ condition:
     value_template: "{{ scanned_name in inventory_name }}"
 
 actions:
-  - device_id: !input 'notify_device'
-    domain: mobile_app
-    type: notify
-    title: "Filament Action"
-    message: "Choose what to do with {{ trigger.event.data.name }}"
-    data:
-      actions:
-        - action: "DECREMENT"
-          title: "Decrement"
-        - action: "SHOW_INFO"
-          title: "Show Info"
-
-  - wait_for_trigger:
-      - platform: event
-        event_type: mobile_app_notification_action
-        event_data:
-          action: DECREMENT
-      - platform: event
-        event_type: mobile_app_notification_action
-        event_data:
-          action: SHOW_INFO
-    timeout: "00:00:30"
-
   - choose:
       - conditions:
           - condition: template
-            value_template: "{{ wait.trigger.event.data.action == 'DECREMENT' }}"
-        sequence:
-          - service: simple_inventory.decrement_item
-            data:
-              inventory_id: "{{ state_attr('sensor.filament_inventory','inventory_id') }}"
-              name: "{{ trigger.event.data.name }}"
-              amount: 1
-
-      - conditions:
-          - condition: template
-            value_template: "{{ wait.trigger.event.data.action == 'SHOW_INFO' }}"
+            value_template: "{{ scanned_device == input_notify_device }}"
         sequence:
           - device_id: !input 'notify_device'
             domain: mobile_app
             type: notify
-            title: "Filament Info"
-            message: >
-              {% set test = trigger.event.data.name %}
-              {% for item in state_attr('sensor.filament_inventory', 'items') %}
-                {% if item.name == test %}
-                  {% if item.category == "" %}
-                    {{ item.name }}
-                  {% else %}
-                    {{ ([item.name] + state_attr('input_select.' ~ (item.category | replace(' ', '_')), 'options')) | join('\n') }}
-                  {% endif %}
-                {% endif %}
-              {% endfor %}
-
-
+            message: Choose what to do with {{ trigger.event.data.name }}
+            data:
+              actions:
+                - action: DECREMENT
+                  title: Decrement
+                - action: SHOW_INFO
+                  title: Show Info
+                - action: SET_EXPIRY
+                  title: Set Expiry
+          - wait_for_trigger:
+              - event_type: mobile_app_notification_action
+                event_data:
+                  action: DECREMENT
+                trigger: event
+              - event_type: mobile_app_notification_action
+                event_data:
+                  action: SHOW_INFO
+                trigger: event
+              - event_type: mobile_app_notification_action
+                event_data:
+                  action: SET_EXPIRY
+                trigger: event
+            timeout: "00:00:10"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wait.trigger.event.data.action == 'DECREMENT' }}"
+                sequence:
+                  - sequence:
+                      - action: simple_inventory.decrement_item
+                        data:
+                          inventory_id: >-
+                            {{
+                            state_attr(input_inventory_id_number,'inventory_id')
+                            }}
+                          name: "{{ trigger.event.data.name }}"
+                          amount: 1
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wait.trigger.event.data.action == 'SET_EXPIRY' }}"
+                sequence:
+                  - sequence:
+                      - action: simple_inventory.update_item
+                        data:
+                          inventory_id: >-
+                            {{
+                            state_attr(input_inventory_id_number,'inventory_id')
+                            }}
+                          old_name: "{{ trigger.event.data.name }}"
+                          name: "{{ trigger.event.data.name }}"
+                          expiry_date: "{{ (now().strftime('%Y-%m-%d')|as_datetime + timedelta(days=60)) }}"
+              - conditions:
+                  - condition: template
+                    value_template: "{{ wait.trigger.event.data.action == 'SHOW_INFO' }}"
+                sequence:
+                  - sequence:
+                      - if:
+                          - condition: template
+                            value_template: |-
+                              {% set test = trigger.event.data.name %} {% for item 
+                                                        in state_attr(input_inventory_id_number, 'items') %}
+                              {% if item.name == test %}
+                                {{ item.expiry_date == "" }}
+                              {% endif %}
+                              {% endfor %}
+                        then:
+                          - action: simple_inventory.update_item
+                            data:
+                              inventory_id: >-
+                                {{
+                                state_attr(input_inventory_id_number,'inventory_id')
+                                }}
+                              old_name: "{{ trigger.event.data.name }}"
+                              name: "{{ trigger.event.data.name }}"
+                              expiry_date: "{{ (now().strftime('%Y-%m-%d')|as_datetime + timedelta(days=60)) }}"
+                      - device_id: !input 'notify_device'
+                        domain: mobile_app
+                        type: notify
+                        title: Filament Info
+                        message: >
+                          {% set test = trigger.event.data.name %} {% for item
+                          in state_attr(input_inventory_id_number, 'items') %}
+                            {% if item.name == test %}
+                            {% set expdate = ((item.expiry_date|as_datetime) - now().strftime('%Y-%m-%d')|as_datetime).days %}
+                              {% if item.category == "" %}
+                                {{ item.name }}
+                          {{ "Check Dessicant in " + expdate|string + " days." }}
+                              {% else %}
+                                {{ ([item.name] + state_attr('input_select.' ~ (item.category | replace(' ', '_')), 'options')) | join('\n') }}
+                          {{ "Check Dessicant in " + expdate|string + " days." }}
+                              {% endif %}
+                            {% endif %}
+                          {% endfor %}
+      - conditions:
+          - condition: template
+            value_template: "{{ scanned_device == input_scan_device }}"
+        sequence: 
+          - sequence:
+              - action: simple_inventory.decrement_item
+                data:
+                  inventory_id: >-
+                    {{
+                    state_attr(input_inventory_id_number,'inventory_id')
+                    }}
+                  name: "{{ trigger.event.data.name }}"
+                  amount: 1
+              - device_id: !input 'notify_device'
+                domain: mobile_app
+                type: notify
+                title: Filament Info
+                message: >
+                  {% set test = trigger.event.data.name %} {% for item
+                  in state_attr(input_inventory_id_number, 'items') %}
+                    {% if item.name == test %}
+                    {% set expdate = ((item.expiry_date|as_datetime) - now().strftime('%Y-%m-%d')|as_datetime).days %}
+                      {% if item.category == "" %}
+                        {{ item.name }}
+                  {{ "Check Dessicant in " + expdate|string + " days." }}
+                      {% else %}
+                        {{ ([item.name] + state_attr('input_select.' ~ (item.category | replace(' ', '_')), 'options')) | join('\n') }}
+                  {{ "Check Dessicant in " + expdate|string + " days." }}
+                      {% endif %}
+                    {% endif %}
+                  {% endfor %}
